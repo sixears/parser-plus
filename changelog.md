@@ -1,3 +1,9 @@
+1.0.3.0 2021-01-21
+==================
+- add betweenCs, parens, brackets, braces, digits, doubledChar, doubledChars,
+      boundedDoubledChars, uniquePrefix, caseInsensitiveChar, 
+      caseInsensitiveString
+
 1.0.2.0 2021-01-15
 ==================
 - add many1choices, and basic tests

@@ -5,20 +5,29 @@
 
 {- | Utilities for working with parsing, e.g., `Text.Read`, or `Text.Parsec`. -}
 module ParserPlus
-  ( many1choice, nl, tries, utf8BOM, whitespaces
-  , tests )
+  ( betweenCs, boundedDoubledChars, braces, brackets, caseInsensitiveChar
+  , caseInsensitiveString, digits, doubledChar, doubledChars, many1choice, nl
+  , parens, tries, uniquePrefix, utf8BOM, whitespaces
+
+  , tests
+  )
 where
 
 -- base --------------------------------
 
 import Control.Applicative  ( Alternative, many )
-import Control.Monad        ( Monad, liftM2, return )
-import Data.Char            ( Char )
+import Control.Monad        ( Monad, liftM2, return, sequence )
+import Control.Monad.Fail   ( MonadFail, fail )
+import Data.Char            ( toLower, toUpper )
 import Data.Either          ( Either( Right ) )
+import Data.Eq              ( Eq )
 import Data.Function        ( ($) )
-import Data.List            ( init, inits, tails, zipWith )
+import Data.Functor         ( fmap )
+import Data.List            ( filter, isPrefixOf, init, inits, tails, zipWith )
 import Data.String          ( String )
 import Data.Foldable        ( foldl1, toList )
+import Data.Traversable     ( Traversable )
+import Data.Tuple           ( fst )
 import System.Exit          ( ExitCode )
 import System.IO            ( IO )
 
@@ -28,12 +37,17 @@ import Data.Function.Unicode    ( (∘) )
 import Data.Monoid.Unicode      ( (⊕) )
 import Numeric.Natural.Unicode  ( ℕ )
 
+-- data-textual ------------------------
+
+import Data.Textual  ( Printable, toString )
+
 -- mono-traversable --------------------
 
 import Data.MonoTraversable  ( Element )
 
 -- more-unicode ------------------------
 
+import Data.MoreUnicode.Char         ( ℂ )
 import Data.MoreUnicode.Applicative  ( (⋪), (⋫), (∤) )
 import Data.MoreUnicode.Functor      ( (⊳) )
 import Data.MoreUnicode.String       ( 𝕊 )
@@ -49,8 +63,9 @@ import Text.Parsec.Prim  ( parse )
 
 -- parsers ------------------------------
 
-import Text.Parser.Combinators  ( Parsing, choice, count, eof, option, try )
-import Text.Parser.Char         ( CharParsing, char, oneOf )
+import Text.Parser.Combinators  ( Parsing, between, choice, count, eof, option
+                                , some, try )
+import Text.Parser.Char         ( CharParsing, char, digit, noneOf, oneOf )
 import Text.Parser.Combinators  ( (<?>), skipOptional )
 
 -- tasty -------------------------------
@@ -78,7 +93,7 @@ tries xs = case toSeqNE xs of
 
 {- | UTF Byte-Order-Mark, may be seen as the first character of UTF8 files
      https://en.wikipedia.org/wiki/Byte_order_mark -}
-utf8BOM ∷ CharParsing η ⇒ η Char
+utf8BOM ∷ CharParsing η ⇒ η ℂ
 utf8BOM = char '\65279'
 
 ----------------------------------------
@@ -163,6 +178,122 @@ many1choiceTests =
               , testAAB_E "bab"
               , testAAB_E "bba"
               ]
+
+----------------------------------------
+
+{- | Parse between two characters -}
+betweenCs ∷ CharParsing η ⇒ ℂ → ℂ → η α → η α
+betweenCs l r = between (char l) (char r)
+
+----------------------------------------
+
+{- | Parse between parentheses -}
+parens ∷ CharParsing η ⇒ η α → η α
+parens = between (char '(') (char ')')
+
+----------------------------------------
+
+{- | Parse between brackets -}
+brackets ∷ CharParsing η ⇒ η α → η α
+brackets = between (char '[') (char ']')
+
+----------------------------------------
+
+{- | Parse between brackets -}
+braces ∷ CharParsing η ⇒ η α → η α
+braces = between (char '{') (char '}')
+
+----------------------------------------
+
+{- | Parse 1 or more digits -}
+digits ∷ CharParsing η ⇒ η 𝕊
+digits = some digit
+
+----------------------------------------
+
+{- | Parse any character except those in `cs`; they must be doubled.  Thus
+
+     @ parse (many (try $ doubledChar "{}")) "test" "o}}{{p}" ≡ Right "o}{p" @
+
+     Note the use of `try`; doubleChar will consume the first char of
+     non-conformant input.
+ -}
+doubledChar ∷ CharParsing η ⇒ [ℂ] → η ℂ
+doubledChar cs = (choice $ (\ c → char c ⋫ char c) ⊳ cs) ∤ noneOf cs
+
+----------------------------------------
+
+{- | Parse many characters, most directly, but those in `cs` must be doubled up.
+
+     @ parse (doubledChars "{}") "test" "o}}{{p}x" ≡ Right "o}{p" @
+ -}
+doubledChars ∷ CharParsing η ⇒ [ℂ] → η 𝕊
+doubledChars cs = many (try $ doubledChar cs)
+
+----------------------------------------
+
+{- | Parse many characters, most directly, bounded by `l` on the left and `r`
+     on the right; instances of `l` & `r` within the text must be doubled up.
+
+     @ parse (boundedDoubledChars '{' '}') "test" "{o}}{{p}x" ≡ Right "o}{p" @
+
+     @ parse (boundedDoubledChars '!' '!') "test" "!o}}!!p!" ≡ Right "o}}!p" @
+ -}
+boundedDoubledChars ∷ CharParsing η ⇒ ℂ → ℂ → η 𝕊
+boundedDoubledChars l r = betweenCs l r (doubledChars [l,r])
+
+----------------------------------------
+
+{- | Parse a uniquely matching prefix.
+
+     Given a value table, and a parser; can we parse to something that uniquely
+     provides a result?  The parser succeeds if the parse output prefixes
+     precisely one result.
+ -}
+uniquePrefix ∷ (MonadFail η, Eq α, Printable χ) ⇒
+               [([α],β)] → ([α] → χ) → η [α] → η β
+uniquePrefix ss e prs = do
+  s ← prs
+  case filter ((s `isPrefixOf`) ∘ fst) ss of
+    [(_,y)] → return y
+    _       → fail $ toString (e s)
+
+----------------------------------------
+
+{- | Parse the given character, or the same character in another case
+     (upper or lower). -}
+caseInsensitiveChar ∷ (Monad η, CharParsing η) ⇒ ℂ → η ℂ
+caseInsensitiveChar c = do
+  _ ← char (toLower c) ∤ char (toUpper c)
+  return c
+
+--------------------
+
+{- | Parse the given string, but with any combination of upper and lower case
+     characters. -}
+caseInsensitiveString ∷ (Monad η, CharParsing η, Traversable φ) ⇒ φ ℂ → η (φ ℂ)
+caseInsensitiveString = sequence ∘ fmap caseInsensitiveChar
+
+--------------------------------------
+
+{-
+eChar ∷ Char
+eChar = '\\'
+
+escape :: Parser String
+escape = pure ⊳ oneOf "\\\"0nrvtbf{}"
+
+nonEscape :: Parser Char
+nonEscape = noneOf "\\\"\0\n\r\v\t\b\f{}"
+
+character :: Parser String
+character = fmap return nonEscape <|> escape
+
+parseEscaped ∷ String → String → Parser String
+parseEscaped l r = do
+    strings <- string l *> many character <* string r
+    return $ concat strings
+-}
 
 ------------------------------------------------------------
 --                         tests                          --
