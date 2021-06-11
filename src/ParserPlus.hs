@@ -1,8 +1,3 @@
-{-# LANGUAGE PatternSynonyms #-}
-{-# LANGUAGE TypeFamilies    #-}
-{-# LANGUAGE UnicodeSyntax   #-}
-{-# LANGUAGE ViewPatterns    #-}
-
 {- | Utilities for working with parsing, e.g., `Text.Read`, or `Text.Parsec`. -}
 module ParserPlus
   ( betweenCs, boundedDoubledChars, braces, brackets, caseInsensitiveChar
@@ -55,7 +50,7 @@ import Data.MoreUnicode.String       ( 𝕊 )
 -- non-empty-containers ----------------
 
 import NonEmptyContainers.SeqNE             ( (⋗), pattern (:⫸) )
-import NonEmptyContainers.SeqNEConversions  ( ToMonoSeqNonEmpty( toSeqNE ) )
+import NonEmptyContainers.SeqNEConversions  ( ToSeqNonEmpty( toSeqNE ) )
 
 -- parsec ------------------------------
 
@@ -85,7 +80,7 @@ import TastyPlus  ( assertIsLeft, runTestsP, runTestsReplay, runTestTree )
 {- | `try` the first thing, then the next thing, until the last thing (which
      isn't surrounded by a `try`) -}
 
-tries ∷ (ToMonoSeqNonEmpty ψ, Parsing η, Element ψ ~ η α) ⇒ ψ → η α
+tries ∷ (ToSeqNonEmpty ψ, Parsing η, Element ψ ~ η α) ⇒ ψ → η α
 tries xs = case toSeqNE xs of
              ts :⫸ t → foldl1 (∤) (toList ((try ⊳ ts) ⋗ t))
 
@@ -132,11 +127,11 @@ choicesTests =
      parse "", "a", "ab", "ba", "b".  We try to be parsimonious about how we do
      that (we don't just generate the cartesian product of possible parses, to
      avoid exponential back-tracking).
-  
+
      Note that you can allow specific repeat counts simply by repeating the
      parser; thus many1choice [string "a", string "a", "string "b"] will parse
      "", "a", "b", "aa", "ab", "ba", "aab", "aba", "baa"
-  
+
      Note also that to avoid backtracking cost, each individual parser is not
      automatically wrapped in a try.  That means that
      many1choice [string "bar", string "baz"]
