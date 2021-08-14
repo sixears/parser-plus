@@ -1,3 +1,7 @@
+1.0.5.0 2021-08-14
+==================
+- add parse1_2, parse1_2digits, parseDecimal2_1, parseFloat2_1
+
 1.0.4.0 2021-08-13
 ==================
 - add commaList, commaSet, sepByNE

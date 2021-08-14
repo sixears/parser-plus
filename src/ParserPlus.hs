@@ -2,36 +2,39 @@
 module ParserPlus
   ( betweenCs, boundedDoubledChars, braces, brackets, caseInsensitiveChar
   , caseInsensitiveString, commaList, commaSet, digits, doubledChar
-  , doubledChars, many1choice, nl, parens, sepByNE, tries, uniquePrefix
-  , utf8BOM, whitespaces
+  , doubledChars, many1choice, nl, parens, parse1_2, parse1_2digits
+  , parseDecimal2_1, parseFloat2_1, sepByNE, tries, uniquePrefix, utf8BOM
+  , whitespaces
 
   , tests
   )
 where
 
-import Prelude  ( Int )
+import Prelude  ( Double, Float, Int )
 
 -- base --------------------------------
 
 import qualified Data.List.NonEmpty  as  NonEmptyList
 
-import Control.Applicative  ( Alternative, many )
+import Control.Applicative  ( Alternative, many, optional, pure )
 import Control.Monad        ( Monad, liftM2, return, sequence )
 import Control.Monad.Fail   ( MonadFail, fail )
+import Data.Bifunctor       ( first )
 import Data.Char            ( toLower, toUpper )
 import Data.Eq              ( Eq )
 import Data.Function        ( ($) )
 import Data.Functor         ( fmap )
 import Data.List            ( filter, isPrefixOf, init, inits, tails, zipWith )
 import Data.List.NonEmpty   ( NonEmpty( (:|) ), nub )
+import Data.Maybe           ( fromMaybe, maybe )
 import Data.Ord             ( Ord )
-import Data.String          ( String )
+import Data.String          ( String, unlines )
 import Data.Foldable        ( foldl1, toList )
 import Data.Traversable     ( Traversable )
 import Data.Tuple           ( fst )
 import System.Exit          ( ExitCode )
 import System.IO            ( IO )
-import Text.Read            ( read )
+import Text.Read            ( Read, read )
 import Text.Show            ( show )
 
 -- base-unicode-symbols ----------------
@@ -52,10 +55,11 @@ import Data.MonoTraversable  ( Element )
 
 -- more-unicode ------------------------
 
-import Data.MoreUnicode.Applicative  ( (⋪), (⋫), (∤) )
+import Data.MoreUnicode.Applicative  ( (⊵), (⋪), (⋫), (∤) )
 import Data.MoreUnicode.Char         ( ℂ )
 import Data.MoreUnicode.Either       ( pattern 𝕷, pattern 𝕽 )
 import Data.MoreUnicode.Functor      ( (⊳) )
+import Data.MoreUnicode.Maybe        ( 𝕄 )
 import Data.MoreUnicode.String       ( 𝕊 )
 
 -- mtl -----------------------
@@ -81,7 +85,8 @@ import Text.Parsec.Prim   ( Parsec, parse )
 
 import Text.Parser.Combinators  ( Parsing, between, choice, count, eof, option
                                 , sepBy1, some, try )
-import Text.Parser.Char         ( CharParsing, char, digit, noneOf, oneOf )
+import Text.Parser.Char         ( CharParsing
+                                , anyChar, char, digit, noneOf, oneOf )
 import Text.Parser.Combinators  ( (<?>), skipOptional )
 
 -- tasty -------------------------------
@@ -322,7 +327,7 @@ commaListTests =
 commaSet ∷ ∀ α η . (Ord α, MonadError 𝕊 η) ⇒
            SourceName → Parsec 𝕊 () α → 𝕊 → η (NESet α)
 commaSet nm p s =
-  case parse (commaList p ⋪ eof) nm s of
+  case parse (commaList p) nm s of
     𝕷 e → throwError (show e)
     𝕽 xs → if xs ≡ nub xs
            then return $ NonEmptySet.fromList xs
@@ -343,6 +348,178 @@ commaSetTests =
                     assertLeft (e @=?)
                                (commaSet t (read @Int ⊳ some digit) t)
             ]
+
+----------------------------------------
+
+{- Parse one or two characters, given a character parser. -}
+parse1_2 ∷ CharParsing ψ ⇒ ψ ℂ → ψ 𝕊
+parse1_2 p = (:) ⊳ p ⊵ (maybe "" pure ⊳ optional p)
+
+----------
+
+parse1_2Tests ∷ TestTree
+parse1_2Tests = testGroup "parse1_2" $
+  let
+    check ∷ 𝕊 → TestTree
+    check x = testCase x $
+      assertRight (x @=?) $ parse (parse1_2 anyChar ⋪ eof) x x
+    checkFail ∷ 𝕊 → 𝕊 → TestTree
+    checkFail x e =
+      testCase x $ assertLeft (e @=?) $
+        first show $ parse (parse1_2 anyChar ⋪ eof) x x
+  in
+    [ check "x"
+    , check "xy"
+    , checkFail "" "(line 1, column 1):\nunexpected end of input"
+    , checkFail "xyz" (init $ unlines [ "\"xyz\" (line 1, column 3):"
+                                      , "unexpected 'z'"
+                                      , "expecting end of input"
+                                      ])
+    ]
+
+--------------------
+
+{- | Parse one or two digits. -}
+parse1_2digits ∷ CharParsing ψ ⇒ ψ 𝕊
+parse1_2digits = parse1_2 digit
+
+----------
+
+parse1_2digitsTests ∷ TestTree
+parse1_2digitsTests = testGroup "parse1_2digits" $
+  let
+    check ∷ 𝕊 → TestTree
+    check x = testCase x $ assertRight (x @=?) $ parse parse1_2digits x x
+    checkFail ∷ 𝕊 → 𝕊 → TestTree
+    checkFail x e =
+      testCase x $ assertLeft (e @=?) $
+        first show $ parse parse1_2digits x x
+  in
+    [ check "1"
+    , check "23"
+    , checkFail ""
+                "(line 1, column 1):\nunexpected end of input\nexpecting digit"
+    , checkFail "x" (init $ unlines [ "\"x\" (line 1, column 1):"
+                                      , "unexpected \"x\""
+                                      , "expecting digit"
+                                      ])
+    ]
+
+--------------------
+
+{- | Parse a decimal value, with up to 2 digits, with up to two decimal
+     places.  Input with no decimal point are allowed, as is input with a
+     trailing decimal point.
+ -}
+parseDecimal2_1 ∷ Read α ⇒ CharParsing ψ ⇒ ψ α
+parseDecimal2_1 =
+   let
+     cat ∷ 𝕄 ℂ → 𝕊
+     -- This is for the post-decimal-point bit; if there's nothing (e.g.,
+     -- '76.'; we add a 0 to make it '76.0' so that `read` parses correctly.
+     -- We do this only for the right-most digit, lest we accidentally insert a
+     -- digit ahead of a non-zero digit and thus change value.
+     cat a = maybe "0" pure a
+     cat' ∷ 𝕊 → 𝕄 𝕊 → 𝕊
+     cat' a b = a ⊕ "." ⊕ fromMaybe "0" b
+     -- parse a group with leading digits (X, XX, XX., XX.Y)
+     p_leading = cat' ⊳ parse1_2digits
+                      ⊵ optional (cat ⊳ (char '.' ⋫ optional digit))
+     -- parse a group with no leading digits (.Y)
+     p_no_lead = (⊕) ⊳ pure "0." ⊵ (char '.' ⋫ (pure ⊳ digit))
+   in
+     read ⊳ (p_leading ∤ p_no_lead)
+
+----------
+
+parseDecimal2_1Tests ∷ TestTree
+parseDecimal2_1Tests = testGroup "parseDecimal2_1" $
+  let
+    check ∷ 𝕊 → Double → TestTree
+    check x d = testCase x $
+      assertRight (d @=?) $ parse (parseDecimal2_1 ⋪ eof) x x
+    checkFail ∷ 𝕊 → 𝕊 → TestTree
+    checkFail x e =
+      testCase x $ assertLeft (e @=?) $
+        first show $ parse @_ @_ @Double (parseDecimal2_1 ⋪ eof) x x
+    unl = init ∘ unlines
+  in
+    [ check  ".1"    0.1
+    , check  "1"     1.0
+    , check  "1."    1.0
+    , check  "1.0"   1.0
+    , check  "1.1"   1.1
+    , check "11"    11.0
+    , check "11."   11.0
+    , check "11.0"  11.0
+    , check "11.1"  11.1
+    , checkFail "" (unl [ "(line 1, column 1):"
+                        , "unexpected end of input"
+                        , "expecting digit or \".\""
+                        ])
+    , checkFail "x" (unl [ "\"x\" (line 1, column 1):"
+                         , "unexpected \"x\""
+                         , "expecting digit or \".\""
+                         ])
+    , checkFail "123" (unl [ "\"123\" (line 1, column 3):"
+                           , "unexpected '3'"
+                           , "expecting \".\" or end of input"
+                           ])
+    , checkFail "1.23" (unl [ "\"1.23\" (line 1, column 4):"
+                            , "unexpected '3'"
+                            , "expecting end of input"
+                            ])
+    ]
+
+--------------------
+
+{- | Parse a Float, one or two digits (pre-decimal), with up to two decimal
+     places. -}
+parseFloat2_1 ∷ CharParsing ψ ⇒ ψ Float
+parseFloat2_1 = parseDecimal2_1
+
+----------
+
+parseFloat2_1Tests ∷ TestTree
+parseFloat2_1Tests = testGroup "parseFloat2_1" $
+  let
+    check ∷ 𝕊 → Float → TestTree
+    check x d = testCase x $
+      assertRight (d @=?) $ parse (parseFloat2_1 ⋪ eof) x x
+    checkFail ∷ 𝕊 → 𝕊 → TestTree
+    checkFail x e =
+      testCase x $ assertLeft (e @=?) $
+        first show $ parse @_ @_ @Float (parseFloat2_1 ⋪ eof) x x
+    unl = init ∘ unlines
+  in
+    [ check  ".1"    0.1
+    , check  "1"     1.0
+    , check  "1."    1.0
+    , check  "1.0"   1.0
+    , check  "1.1"   1.1
+    , check "11"    11.0
+    , check "11."   11.0
+    , check "11.0"  11.0
+    , check "11.1"  11.1
+    , checkFail "" (unl [ "(line 1, column 1):"
+                        , "unexpected end of input"
+                        , "expecting digit or \".\""
+                        ])
+    , checkFail "x" (unl [ "\"x\" (line 1, column 1):"
+                         , "unexpected \"x\""
+                         , "expecting digit or \".\""
+                         ])
+    , checkFail "123" (unl [ "\"123\" (line 1, column 3):"
+                           , "unexpected '3'"
+                           , "expecting \".\" or end of input"
+                           ])
+    , checkFail "1.23" (unl [ "\"1.23\" (line 1, column 4):"
+                            , "unexpected '3'"
+                            , "expecting end of input"
+                            ])
+    ]
+
+----------------------------------------
 
 {-
 eChar ∷ Char
@@ -370,7 +547,9 @@ parseEscaped l r = do
 tests ∷ TestTree
 tests = testGroup "ParserPlus"
                   [ choicesTests, many1choiceTests, commaListTests
-                  , commaSetTests ]
+                  , commaSetTests, parse1_2Tests, parse1_2digitsTests
+                  , parseDecimal2_1Tests, parseFloat2_1Tests
+                  ]
 
 --------------------
 
