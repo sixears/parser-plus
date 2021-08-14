@@ -10,7 +10,7 @@ name:                parser-plus
 -- PVP summary:      +-+------- breaking API changes
 --                   | | +----- non-breaking API additions
 --                   | | | +--- code changes with no API change
-version:             1.0.3.1
+version:             1.0.4.0
 
 -- A short (one-line) description of the package.
 synopsis:            manage info.yaml
@@ -54,8 +54,11 @@ library
   -- modules included in this library but not exported.
   other-modules:
 
-  default-extensions: NoImplicitPrelude
+  default-extensions: FlexibleContexts
+                    , NoImplicitPrelude
                     , PatternSynonyms
+                    , RankNTypes
+                    , TypeApplications
                     , TypeFamilies
                     , UnicodeSyntax
                     , ViewPatterns
@@ -65,11 +68,12 @@ library
 
   -- Other library packages from which modules are imported.
   build-depends:       base, base-unicode-symbols, data-textual
-                     , mono-traversable, parsec, parsers, tasty, tasty-hunit
+                     , mono-traversable, mtl, nonempty-containers, parsec
+                     , parsers, tasty, tasty-hunit
 
                      , more-unicode         >= 0.0.15.0
-                     , non-empty-containers >= 1.4.1.0
-                     , tasty-plus           >= 1.5.0.1
+                     , non-empty-containers >= 1.4.2.0
+                     , tasty-plus           >= 1.5.1.0
 
   -- Directories containing source files.
   hs-source-dirs:      src

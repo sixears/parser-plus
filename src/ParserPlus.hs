@@ -1,36 +1,46 @@
 {- | Utilities for working with parsing, e.g., `Text.Read`, or `Text.Parsec`. -}
 module ParserPlus
   ( betweenCs, boundedDoubledChars, braces, brackets, caseInsensitiveChar
-  , caseInsensitiveString, digits, doubledChar, doubledChars, many1choice, nl
-  , parens, tries, uniquePrefix, utf8BOM, whitespaces
+  , caseInsensitiveString, commaList, commaSet, digits, doubledChar
+  , doubledChars, many1choice, nl, parens, sepByNE, tries, uniquePrefix
+  , utf8BOM, whitespaces
 
   , tests
   )
 where
 
+import Prelude  ( Int )
+
 -- base --------------------------------
+
+import qualified Data.List.NonEmpty  as  NonEmptyList
 
 import Control.Applicative  ( Alternative, many )
 import Control.Monad        ( Monad, liftM2, return, sequence )
 import Control.Monad.Fail   ( MonadFail, fail )
 import Data.Char            ( toLower, toUpper )
-import Data.Either          ( Either( Right ) )
 import Data.Eq              ( Eq )
 import Data.Function        ( ($) )
 import Data.Functor         ( fmap )
 import Data.List            ( filter, isPrefixOf, init, inits, tails, zipWith )
+import Data.List.NonEmpty   ( NonEmpty( (:|) ), nub )
+import Data.Ord             ( Ord )
 import Data.String          ( String )
 import Data.Foldable        ( foldl1, toList )
 import Data.Traversable     ( Traversable )
 import Data.Tuple           ( fst )
 import System.Exit          ( ExitCode )
 import System.IO            ( IO )
+import Text.Read            ( read )
+import Text.Show            ( show )
 
 -- base-unicode-symbols ----------------
 
+import Data.Eq.Unicode          ( (≡) )
 import Data.Function.Unicode    ( (∘) )
 import Data.Monoid.Unicode      ( (⊕) )
 import Numeric.Natural.Unicode  ( ℕ )
+import Prelude.Unicode          ( ℤ )
 
 -- data-textual ------------------------
 
@@ -42,10 +52,20 @@ import Data.MonoTraversable  ( Element )
 
 -- more-unicode ------------------------
 
-import Data.MoreUnicode.Char         ( ℂ )
 import Data.MoreUnicode.Applicative  ( (⋪), (⋫), (∤) )
+import Data.MoreUnicode.Char         ( ℂ )
+import Data.MoreUnicode.Either       ( pattern 𝕷, pattern 𝕽 )
 import Data.MoreUnicode.Functor      ( (⊳) )
 import Data.MoreUnicode.String       ( 𝕊 )
+
+-- mtl -----------------------
+
+import Control.Monad.Except  ( MonadError, throwError )
+
+-- nonempty-containers -----------------
+
+import qualified Data.Set.NonEmpty  as  NonEmptySet
+import Data.Set.NonEmpty  ( NESet )
 
 -- non-empty-containers ----------------
 
@@ -54,12 +74,13 @@ import NonEmptyContainers.SeqNEConversions  ( ToSeqNonEmpty( toSeqNE ) )
 
 -- parsec ------------------------------
 
-import Text.Parsec.Prim  ( parse )
+import Text.Parsec        ( SourceName )
+import Text.Parsec.Prim   ( Parsec, parse )
 
 -- parsers ------------------------------
 
 import Text.Parser.Combinators  ( Parsing, between, choice, count, eof, option
-                                , some, try )
+                                , sepBy1, some, try )
 import Text.Parser.Char         ( CharParsing, char, digit, noneOf, oneOf )
 import Text.Parser.Combinators  ( (<?>), skipOptional )
 
@@ -73,7 +94,8 @@ import Test.Tasty.HUnit  ( (@=?), testCase )
 
 -- tasty-plus --------------------------
 
-import TastyPlus  ( assertIsLeft, runTestsP, runTestsReplay, runTestTree )
+import TastyPlus  ( assertIsLeft, assertLeft, assertRight, runTestsP
+                  , runTestsReplay, runTestTree )
 
 --------------------------------------------------------------------------------
 
@@ -155,7 +177,7 @@ many1choiceTests =
     aab = many1choice [char 'a', char 'a', char 'b'] ⋪ eof
 
 
-    testAAB s = testCase s $ Right s @=? parse aab s s
+    testAAB s = testCase s $ 𝕽 s @=? parse aab s s
     testAAB_E s = testCase s $ assertIsLeft (parse aab s s)
    in
     testGroup "many1choice"
@@ -271,6 +293,57 @@ caseInsensitiveString = sequence ∘ fmap caseInsensitiveChar
 
 --------------------------------------
 
+{- | Parse a NonEmpty list of things with a separator; like `sepBy1`, but more
+     strongly typed. -}
+sepByNE ∷ Alternative γ ⇒ γ α → γ σ → γ (NonEmpty α)
+sepByNE x s = NonEmptyList.fromList ⊳ sepBy1 x s
+
+--------------------------------------
+
+{- | Parse a comma-separated non-empty set of values, given a value parser. -}
+commaList ∷ ∀ α ρ . (Ord α, CharParsing ρ) ⇒ ρ α → ρ (NonEmpty α)
+commaList p = sepByNE p (char ',')
+
+--------------------
+
+commaListTests ∷ TestTree
+commaListTests =
+  let parse' = parse @𝕊 @_ @(NonEmpty Int)
+   in testGroup "commaList"
+                [ let (t,e) = ("123,45,6", 123 :| [45, 6])
+                   in testCase t $
+                        𝕽 e @=? parse' (commaList (read ⊳ some digit)) t t
+                ]
+
+----------------------------------------
+
+{- | Parse a comma-separated non-empty set of values, given a value parser.
+     A `String` error is thrown if duplicates are detected. -}
+commaSet ∷ ∀ α η . (Ord α, MonadError 𝕊 η) ⇒
+           SourceName → Parsec 𝕊 () α → 𝕊 → η (NESet α)
+commaSet nm p s =
+  case parse (commaList p ⋪ eof) nm s of
+    𝕷 e → throwError (show e)
+    𝕽 xs → if xs ≡ nub xs
+           then return $ NonEmptySet.fromList xs
+           else throwError $ "Duplicates detected in input '" ⊕ s ⊕ "'"
+
+--------------------
+
+commaSetTests ∷ TestTree
+commaSetTests =
+  testGroup "commaSet"
+            [ let t = "1,23,456"
+                  e = NonEmptySet.fromList (1 :| [23,456∷ℤ])
+               in testCase t $
+                    assertRight (e @=?) (commaSet t (read ⊳ some digit) t)
+            , let t = "1,23,23"
+                  e = "Duplicates detected in input '" ⊕ t ⊕ "'"
+               in testCase t $
+                    assertLeft (e @=?)
+                               (commaSet t (read @Int ⊳ some digit) t)
+            ]
+
 {-
 eChar ∷ Char
 eChar = '\\'
@@ -295,7 +368,9 @@ parseEscaped l r = do
 ------------------------------------------------------------
 
 tests ∷ TestTree
-tests = testGroup "ParserPlus" [ choicesTests, many1choiceTests ]
+tests = testGroup "ParserPlus"
+                  [ choicesTests, many1choiceTests, commaListTests
+                  , commaSetTests ]
 
 --------------------
 

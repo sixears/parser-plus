@@ -1,3 +1,7 @@
+1.0.4.0 2021-08-13
+==================
+- add commaList, commaSet, sepByNE
+
 1.0.3.1 2021-06-11
 ==================
 - use non-empty-containers 1.4.1.0
