@@ -1,3 +1,9 @@
+1.0.6.0 2021-10-08
+==================
+
+- add convert{,Read}Parser, counts, nDecimal{,Digits{,'}}, ngidits{,PadR},
+  parseMicros, parseMillis
+
 1.0.5.0 2021-08-14
 ==================
 - add parse1_2, parse1_2digits, parseDecimal2_1, parseFloat2_1

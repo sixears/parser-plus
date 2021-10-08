@@ -1,16 +1,17 @@
 {- | Utilities for working with parsing, e.g., `Text.Read`, or `Text.Parsec`. -}
 module ParserPlus
   ( betweenCs, boundedDoubledChars, braces, brackets, caseInsensitiveChar
-  , caseInsensitiveString, commaList, commaSet, digits, doubledChar
-  , doubledChars, many1choice, nl, parens, parse1_2, parse1_2digits
-  , parseDecimal2_1, parseFloat2_1, sepByNE, tries, uniquePrefix, utf8BOM
-  , whitespaces
+  , caseInsensitiveString, commaList, commaSet, convertParser, convertReadParser
+  , counts, digits, doubledChar, doubledChars, many1choice, nDecimal
+  , nDecimalDigits, nDecimalDigits', ndigits, ndigitsPadR, nl, parens, parse1_2
+  , parse1_2digits, parseDecimal2_1, parseFloat2_1, parseMicros, parseMillis
+  , sepByNE, tries, uniquePrefix, utf8BOM , whitespaces
 
   , tests
   )
 where
 
-import Prelude  ( Double, Float, Int )
+import Prelude  ( (-), Double, Float, Num, fromIntegral, Int )
 
 -- base --------------------------------
 
@@ -21,10 +22,12 @@ import Control.Monad        ( Monad, liftM2, return, sequence )
 import Control.Monad.Fail   ( MonadFail, fail )
 import Data.Bifunctor       ( first )
 import Data.Char            ( toLower, toUpper )
+import Data.Either          ( either )
 import Data.Eq              ( Eq )
 import Data.Function        ( ($) )
 import Data.Functor         ( fmap )
-import Data.List            ( filter, isPrefixOf, init, inits, tails, zipWith )
+import Data.List            ( dropWhile, filter, isPrefixOf, init, inits, last
+                            , replicate, tails, zipWith )
 import Data.List.NonEmpty   ( NonEmpty( (:|) ), nub )
 import Data.Maybe           ( fromMaybe, maybe )
 import Data.Ord             ( Ord )
@@ -34,7 +37,7 @@ import Data.Traversable     ( Traversable )
 import Data.Tuple           ( fst )
 import System.Exit          ( ExitCode )
 import System.IO            ( IO )
-import Text.Read            ( Read, read )
+import Text.Read            ( Read, read, readEither )
 import Text.Show            ( show )
 
 -- base-unicode-symbols ----------------
@@ -57,14 +60,19 @@ import Data.MonoTraversable  ( Element )
 
 import Data.MoreUnicode.Applicative  ( (⊵), (⋪), (⋫), (∤) )
 import Data.MoreUnicode.Char         ( ℂ )
-import Data.MoreUnicode.Either       ( pattern 𝕷, pattern 𝕽 )
+import Data.MoreUnicode.Either       ( 𝔼, pattern 𝕷, pattern 𝕽 )
 import Data.MoreUnicode.Functor      ( (⊳) )
 import Data.MoreUnicode.Maybe        ( 𝕄 )
+import Data.MoreUnicode.Monad        ( (≫) )
 import Data.MoreUnicode.String       ( 𝕊 )
 
 -- mtl -----------------------
 
 import Control.Monad.Except  ( MonadError, throwError )
+
+-- natural -----------------------------
+
+import Natural  ( length )
 
 -- nonempty-containers -----------------
 
@@ -87,7 +95,7 @@ import Text.Parser.Combinators  ( Parsing, between, choice, count, eof, option
                                 , sepBy1, some, try )
 import Text.Parser.Char         ( CharParsing
                                 , anyChar, char, digit, noneOf, oneOf )
-import Text.Parser.Combinators  ( (<?>), skipOptional )
+import Text.Parser.Combinators  ( (<?>), skipOptional, unexpected )
 
 -- tasty -------------------------------
 
@@ -489,7 +497,7 @@ parseFloat2_1Tests = testGroup "parseFloat2_1" $
     checkFail ∷ 𝕊 → 𝕊 → TestTree
     checkFail x e =
       testCase x $ assertLeft (e @=?) $
-        first show $ parse @_ @_ @Float (parseFloat2_1 ⋪ eof) x x
+        first show $ parse (parseFloat2_1 ⋪ eof) x x
     unl = init ∘ unlines
   in
     [ check  ".1"    0.1
@@ -521,6 +529,22 @@ parseFloat2_1Tests = testGroup "parseFloat2_1" $
 
 ----------------------------------------
 
+{- | Given a parser (of α), and a checked conversion (from α → β, or a 𝕊 error);
+     build a parser for β. -}
+convertParser ∷ ∀ α β η . (Monad η, Parsing η) ⇒
+                (α → 𝔼 𝕊 β) → η (𝔼 𝕊 α) → η β
+convertParser f p = p ≫ either unexpected (either unexpected return ∘ f)
+
+--------------------
+
+{- | Given a parser (of 𝕊), and a checked conversion (from α → β, where α is an
+     instance of `Read`); build a parser for β. -}
+convertReadParser ∷ ∀ α β η . (Monad η, CharParsing η, Read α) ⇒
+                    (α → 𝔼 𝕊 β) → η 𝕊 → η β
+convertReadParser f p = convertParser f (readEither ⊳ p)
+
+----------------------------------------
+
 {-
 eChar ∷ Char
 eChar = '\\'
@@ -540,6 +564,173 @@ parseEscaped l r = do
     return $ concat strings
 -}
 
+----------------------------------------
+
+{- | A parser `p` repeated between `m` & `n` times.  You almost certainly
+     want to follow this with something that p would not match. -}
+counts ∷ (Alternative φ, Parsing φ) ⇒ ℕ → ℕ → φ α → φ [α]
+counts m n p = case [n,n-1..m] of
+                 []     → pure []
+                 (x:xs) → tries $ (\ i → count (fromIntegral i) p) ⊳ x:|xs
+
+----------------------------------------
+
+
+{- | Parse between `m` & `n` consecutive digits, right-padding to `n` digits
+     with a '0' char.  E.g., for parsing after a decimal point. -}
+ndigits ∷ ∀ α φ . (Num α, Read α, CharParsing φ) ⇒ ℕ → ℕ → φ α
+ndigits m n = (\ x -> case x of "" -> 0; _ -> read x) ⊳ (counts m n digit)
+
+{- | Parse between `m` & `n` consecutive digits, right-padding to `n` digits
+     with a '0' char.  E.g., for parsing after a decimal point. -}
+ndigitsPadR ∷ CharParsing φ ⇒ ℕ → ℕ → φ 𝕊
+ndigitsPadR m n =
+  (padR n '0' ∘ show @ℕ) ⊳ ndigits m n
+  where len s = fromIntegral $ length s
+        -- we use integer arithmetic here, rather than natural, so that if
+        -- (n - len s) were to be negative; replicate gives an empty list rather
+        -- than a type error
+        padR i c s = s ⊕ replicate (fromIntegral @_ @Int i - len s) c
+
+----------------------------------------
+
+{- | Parse up to `n` digits after a decimal point; returns the digits.  Pads
+     out the digits (on the right) with '0's.  If there is no decimal point,
+     a string of `n` '0's is returned.  This is to provide a consistent number
+     of post-decimal-point numbers, where the user can specify up to `n` digits.
+ -}
+nDecimalDigits ∷ CharParsing φ ⇒ ℕ → φ 𝕊
+nDecimalDigits n = char '.' ⋫ ndigitsPadR 0 (fromIntegral n)
+
+----------
+
+nDecimalDigitsTests ∷ TestTree
+nDecimalDigitsTests = testGroup "nDecimalDigits" $
+  let
+    check ∷ 𝕊 → 𝕊 → TestTree
+    check x d = testCase x $
+      assertRight (d @=?) $ parse (nDecimalDigits 3 ⋪ eof) x x
+    checkFail ∷ 𝕊 → 𝕊 → TestTree
+    checkFail x e =
+      testCase x $ assertLeft (e @=?) $
+        first show $ parse (nDecimalDigits 3 ⋪ eof) x x
+    unl = init ∘ unlines
+  in
+    [ check  ".1"    "100"
+    , check  "."     "000"
+    , check  ".123"  "123"
+    , checkFail ".1234" (unl [ "\".1234\" (line 1, column 5):"
+                             , "unexpected '4'"
+                             , "expecting end of input"
+                             ])
+    , checkFail "" (unl [ "(line 1, column 1):"
+                        , "unexpected end of input"
+                        , "expecting \".\""
+                        ])
+    ]
+
+----------------------------------------
+
+{- | Like `nDecimalDigits`; but will accept an empty string (no leading '.'),
+     which will be "parsed" as a string of '0's.
+ -}
+nDecimalDigits' ∷ CharParsing φ ⇒ ℕ → φ 𝕊
+nDecimalDigits' n =
+  fromMaybe (replicate (fromIntegral n) '0') ⊳ optional (nDecimalDigits n)
+
+----------
+
+nDecimalDigits'Tests ∷ TestTree
+nDecimalDigits'Tests = testGroup "nDecimalDigits'" $
+  let
+    check ∷ 𝕊 → 𝕊 → TestTree
+    check x d = testCase x $
+      assertRight (d @=?) $ parse (nDecimalDigits' 3 ⋪ eof) x x
+    checkFail ∷ 𝕊 → 𝕊 → TestTree
+    checkFail x e =
+      testCase x $ assertLeft (e @=?) $
+        first show $ parse (nDecimalDigits' 3 ⋪ eof) x x
+    unl = init ∘ unlines
+  in
+    [ check  ".1"    "100"
+    , check  "."     "000"
+    , check  ""      "000"
+    , check  ".123"  "123"
+    , checkFail ".1234" (unl [ "\".1234\" (line 1, column 5):"
+                             , "unexpected '4'"
+                             , "expecting end of input"
+                             ])
+    ]
+
+----------------------------------------
+
+{- | Parse a decimal value, with an optional decimal point and up to `n` digits
+     after.  The result is returned as a string, which is effectively the int
+     multiplied by 10^n; thus, a string "10.23" is returned as "1023".
+
+     If fewer than `n` digits are supplied after the decimal point, the
+     "missing" digits are filled in with zeros; thus `nDecimal 3` when parsing
+     "10.2" will return "10200".
+
+     Leading zeroes with in the result will be dropped; hence `nDecimal 3` when
+     parsing "0.1" will return "100".
+
+     Note that this will not successfully parse an empty string; but a lone
+     decimal point will parse as "0"
+ -}
+nDecimal ∷ CharParsing φ ⇒ ℕ → φ 𝕊
+nDecimal n =
+  let zeroes = replicate (fromIntegral n) '0'
+      dropWhileInit p xs = dropWhile p (init xs) ⊕ [last xs]
+   in dropWhileInit (≡ '0') ⊳ (tries $ ((⊕) ⊳ many digit ⊵ nDecimalDigits n)
+                                    :| [ (⊕) ⊳ some digit ⊵ pure zeroes ] )
+
+----------
+
+nDecimalTests ∷ TestTree
+nDecimalTests = testGroup "nDecimal" $
+  let
+    check ∷ 𝕊 → 𝕊 → TestTree
+    check x d = testCase x $
+      assertRight (d @=?) $ parse (nDecimal 3 ⋪ eof) x x
+    checkFail ∷ 𝕊 → 𝕊 → TestTree
+    checkFail x e =
+      testCase x $ assertLeft (e @=?) $
+        first show $ parse (nDecimal 3 ⋪ eof) x x
+    unl = init ∘ unlines
+  in
+    [ check  "0.1"    "100"
+    , check  "1"     "1000"
+    , check  ".1"     "100"
+    , check  "."        "0"
+    , check  "0"        "0"
+    , check  "1.234" "1234"
+    , checkFail  ""         (unl [ "(line 1, column 1):"
+                                 , "unexpected end of input"
+                                 , "expecting digit or \".\""
+                                 ])
+    , checkFail "1.2345678" (unl [ "\"1.2345678\" (line 1, column 6):"
+                                 , "unexpected '5'"
+                                 , "expecting end of input"
+                                 ])
+    ]
+
+----------------------------------------
+
+{- | Parse a milli- value, given as a decimal number of seconds with up to 3
+     digits after an (optional) decimal point.  -}
+
+parseMillis ∷ CharParsing φ ⇒ φ 𝕊
+parseMillis = nDecimal 3
+
+----------------------------------------
+
+{- | Parse a micro- value, given as a decimal number of seconds with up to 6
+     digits after an (optional) decimal point.  -}
+
+parseMicros ∷ CharParsing φ ⇒ φ 𝕊
+parseMicros = nDecimal 6
+
 ------------------------------------------------------------
 --                         tests                          --
 ------------------------------------------------------------
@@ -549,6 +740,8 @@ tests = testGroup "ParserPlus"
                   [ choicesTests, many1choiceTests, commaListTests
                   , commaSetTests, parse1_2Tests, parse1_2digitsTests
                   , parseDecimal2_1Tests, parseFloat2_1Tests
+                  , nDecimalDigitsTests, nDecimalDigits'Tests
+                  , nDecimalTests
                   ]
 
 --------------------
