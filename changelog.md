@@ -1,3 +1,7 @@
+1.0.7.0 2021-12-03
+==================
+- add dQuotedString, stringMaybeDQuoted, parseBackslashedChar
+
 1.0.6.0 2021-10-08
 ==================
 

@@ -2,10 +2,11 @@
 module ParserPlus
   ( betweenCs, boundedDoubledChars, braces, brackets, caseInsensitiveChar
   , caseInsensitiveString, commaList, commaSet, convertParser, convertReadParser
-  , counts, digits, doubledChar, doubledChars, many1choice, nDecimal
-  , nDecimalDigits, nDecimalDigits', ndigits, ndigitsPadR, nl, parens, parse1_2
-  , parse1_2digits, parseDecimal2_1, parseFloat2_1, parseMicros, parseMillis
-  , sepByNE, tries, uniquePrefix, utf8BOM , whitespaces
+  , counts, digits, doubledChar, doubledChars, dQuotedString, many1choice
+  , nDecimal, nDecimalDigits, nDecimalDigits', ndigits, ndigitsPadR, nl, parens
+  , parse1_2, parse1_2digits, parseBackslashedChar, parseDecimal2_1
+  , parseFloat2_1, parseMicros, parseMillis, sepByNE, stringMaybeDQuoted, tries
+  , uniquePrefix, utf8BOM, whitespaces
 
   , tests
   )
@@ -26,8 +27,8 @@ import Data.Either          ( either )
 import Data.Eq              ( Eq )
 import Data.Function        ( ($) )
 import Data.Functor         ( fmap )
-import Data.List            ( dropWhile, filter, isPrefixOf, init, inits, last
-                            , replicate, tails, zipWith )
+import Data.List            ( dropWhile, filter, foldr1, isPrefixOf, init, inits
+                            , last, replicate, tails, zipWith )
 import Data.List.NonEmpty   ( NonEmpty( (:|) ), nub )
 import Data.Maybe           ( fromMaybe, maybe )
 import Data.Ord             ( Ord )
@@ -86,7 +87,7 @@ import NonEmptyContainers.SeqNEConversions  ( ToSeqNonEmpty( toSeqNE ) )
 
 -- parsec ------------------------------
 
-import Text.Parsec        ( SourceName )
+import Text.Parsec        ( ParseError, SourceName )
 import Text.Parsec.Prim   ( Parsec, parse )
 
 -- parsers ------------------------------
@@ -99,7 +100,7 @@ import Text.Parser.Combinators  ( (<?>), skipOptional, unexpected )
 
 -- tasty -------------------------------
 
-import Test.Tasty  ( TestTree, testGroup )
+import Test.Tasty  ( TestName, TestTree, testGroup )
 
 -- tasty-hunit -------------------------
 
@@ -731,6 +732,103 @@ parseMillis = nDecimal 3
 parseMicros ∷ CharParsing φ ⇒ φ 𝕊
 parseMicros = nDecimal 6
 
+----------------------------------------
+
+{- | Parse a single char from a string, which must be a backslashed double-quote,
+     t (tab), n (newline) or backslash. -}
+parseBackslashedChar ∷ CharParsing η ⇒ η ℂ
+
+parseBackslashedChar = char '\\' ⋫ foldr1 (∤) [ char '\\' ⋫ pure '\\'
+                                              , char 't'  ⋫ pure '\t'
+                                              , char 'n'  ⋫ pure '\n'
+                                              , char '"'  ⋫ pure '"'
+                                              ]
+
+----------
+
+parseBackslashedCharTests ∷ TestTree
+parseBackslashedCharTests =
+  let prse           ∷ 𝕊 → 𝔼 ParseError ℂ
+      prse s         = parse parseBackslashedChar s s
+      check          ∷ TestName → ℂ → 𝕊 → TestTree
+      check nm c s   = testCase nm $ assertRight (c @=?) (prse s)
+      checkFail      ∷ TestName → 𝕊 → TestTree
+      checkFail nm s = testCase nm $ assertIsLeft (prse s)
+   in testGroup "parseBackslashedChar"
+    [ check "newline" '\n' "\\n"
+    , check "tab"     '\t' "\\t"
+    , check "\\"      '\\' "\\\\"
+    , checkFail "a" "\\a"
+    , checkFail "\\t" "\t"
+    ]
+
+----------------------------------------
+
+{- | Parse a double-quoted string.  Within that string, actual newlines & tabs
+     are forbidden: slashes & double-quotes must be backslashed, and newlines
+     are '\n', tabs are '\t'.
+ -}
+dQuotedString ∷ CharParsing η ⇒ η 𝕊
+dQuotedString = char '"' ⋫ inner ⋪ char '"'
+                where inner =  many (parseBackslashedChar ∤ noneOf "\"\\\n\t")
+
+--------------------
+
+dQuotedStringTests ∷ TestTree
+dQuotedStringTests =
+  let prse           ∷ 𝕊 → 𝔼 ParseError 𝕊
+      prse s         = parse dQuotedString s s
+      check          ∷ TestName → 𝕊 → 𝕊 → TestTree
+      check nm c s   = testCase nm $ assertRight (c @=?) (prse s)
+      checkFail      ∷ TestName → 𝕊 → TestTree
+      checkFail nm s = testCase nm $ assertIsLeft (prse s)
+   in testGroup "dQuotedString"
+    [ check "newline" "\n"  "\"\\n\""
+    , check "tab"     "\t"  "\"\\t\""
+    , check "\\"      "\\"  "\"\\\\\""
+    , check "bob"     "bob" "\"bob\""
+    , check "empty"   ""    "\"\""
+    , checkFail "a" "\\a"
+    , checkFail "\"a" "\"a"
+    , checkFail "a\"" "a\""
+    , checkFail "\\t" "\t"
+    ]
+
+----------------------------------------
+
+{- | Either a double-quoted string (see `dQuotedString`) or else an unquoted
+     string, with no newlines, tabs or spaces (and not starting with a
+     double-quote).
+-}
+stringMaybeDQuoted ∷ CharParsing η ⇒ η 𝕊
+stringMaybeDQuoted =
+  dQuotedString ∤ ((:) ⊳ noneOf ("\"\n\t ") ⊵ many (noneOf "\n\t "))
+
+--------------------
+
+stringMaybeDQuotedTests ∷ TestTree
+stringMaybeDQuotedTests =
+  let prse           ∷ 𝕊 → 𝔼 ParseError 𝕊
+      prse s         = parse (stringMaybeDQuoted ⋪ eof) s s
+      check          ∷ TestName → 𝕊 → 𝕊 → TestTree
+      check nm c s   = testCase nm $ assertRight (c @=?) (prse s)
+      checkFail      ∷ TestName → 𝕊 → TestTree
+      checkFail nm s = testCase nm $ assertIsLeft (prse s)
+   in testGroup "stringMaybeDQuoted"
+    [ check "newline"     "\n"  "\"\\n\""
+    , check "tab"         "\t"  "\"\\t\""
+    , check "\\"          "\\"  "\"\\\\\""
+    , check "bob"         "bob" "\"bob\""
+    , check "\"bob cat\"" "bob cat" "\"bob cat\""
+    , checkFail           "bob" "bob cat"
+    , check "foo"         "foo" "foo"
+    , check "empty"       ""    "\"\""
+    , check "\\a"         "\\a" "\\a"
+    , checkFail           "\"a" "\"a"
+    , check "a\""         "a\"" "a\""
+    , checkFail           "\\t" "\t"
+    ]
+
 ------------------------------------------------------------
 --                         tests                          --
 ------------------------------------------------------------
@@ -741,7 +839,8 @@ tests = testGroup "ParserPlus"
                   , commaSetTests, parse1_2Tests, parse1_2digitsTests
                   , parseDecimal2_1Tests, parseFloat2_1Tests
                   , nDecimalDigitsTests, nDecimalDigits'Tests
-                  , nDecimalTests
+                  , nDecimalTests, parseBackslashedCharTests, dQuotedStringTests
+                  , stringMaybeDQuotedTests
                   ]
 
 --------------------
