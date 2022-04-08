@@ -1,3 +1,7 @@
+1.0.7.1 2022-04-07
+==================
+- updated dependencies
+
 1.0.7.0 2021-12-03
 ==================
 - add dQuotedString, stringMaybeDQuoted, parseBackslashedChar

@@ -10,7 +10,7 @@ name:                parser-plus
 -- PVP summary:      +-+------- breaking API changes
 --                   | | +----- non-breaking API additions
 --                   | | | +--- code changes with no API change
-version:             1.0.7.0
+version:             1.0.7.1
 
 -- A short (one-line) description of the package.
 synopsis:            manage info.yaml
@@ -74,7 +74,7 @@ library
 
                      , more-unicode         >= 0.0.16.0
                      , natural              >= 0.0.1.0
-                     , non-empty-containers >= 1.4.2.0
+                     , non-empty-containers >= 1.4.3.1
                      , tasty-plus           >= 1.5.1.0
 
   -- Directories containing source files.
