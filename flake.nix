@@ -7,8 +7,8 @@
 
     more-unicode.url         = "github:sixears/more-unicode/r0.0.17.8";
     natural.url              = "github:sixears/natural/r0.0.1.9";
-    non-empty-containers.url = "github:sixears/non-empty-containers/r1.4.3.13";
-    tasty-plus.url           = "github:sixears/tasty-plus/r1.5.2.11";
+    non-empty-containers.url = "github:sixears/non-empty-containers/r1.4.3.14";
+    tasty-plus.url           = "github:sixears/tasty-plus/r1.5.2.12";
   };
 
   outputs = { self, nixpkgs, build-utils
