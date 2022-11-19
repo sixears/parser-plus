@@ -14,9 +14,23 @@
   outputs = { self, nixpkgs, build-utils
             , more-unicode, natural, non-empty-containers, tasty-plus }:
     build-utils.lib.hOutputs self nixpkgs "parser-plus" {
-      deps = {
-        inherit more-unicode natural non-empty-containers tasty-plus;
-      };
       ghc = p: p.ghc8107; # for tfmt
+      callPackage = { mkDerivation, lib, mapPkg, system
+                    , base, base-unicode-symbols, data-textual, mono-traversable
+                    , mtl, nonempty-containers, parsec, parsers, tasty
+                    , tasty-hunit
+                    }:
+        mkDerivation {
+          pname = "parser-plus";
+          version = "1.0.7.23";
+          src = ./.;
+          libraryHaskellDepends = [
+            base base-unicode-symbols data-textual mono-traversable mtl
+            nonempty-containers parsec parsers tasty tasty-hunit
+          ] ++ mapPkg [ more-unicode natural non-empty-containers tasty-plus ];
+          testHaskellDepends = [ base tasty ];
+          description = "manage info.yaml";
+          license = lib.licenses.mit;
+        };
     };
 }
