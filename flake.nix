@@ -7,8 +7,8 @@
 
     more-unicode.url         = github:sixears/more-unicode/r0.0.17.12;
     natural.url              = github:sixears/natural/r0.0.1.14;
-    non-empty-containers.url = github:sixears/non-empty-containers/r1.4.3.35;
-    tasty-plus.url           = github:sixears/tasty-plus/r1.5.2.23;
+    non-empty-containers.url = github:sixears/non-empty-containers/r1.4.3.36;
+    tasty-plus.url           = github:sixears/tasty-plus/r1.5.2.24;
   };
 
   outputs = { self, nixpkgs, build-utils
@@ -22,7 +22,7 @@
                     }:
         mkDerivation {
           pname = "parser-plus";
-          version = "1.0.7.27";
+          version = "1.0.7.28";
           src = ./.;
           libraryHaskellDepends = [
             base base-unicode-symbols data-textual mono-traversable mtl
